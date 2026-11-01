@@ -66,6 +66,7 @@ describe('ParkEase parking rules',()=>{
     s=seed();const base=new Date('2026-03-01T00:30:00+08:00').getTime();s={...s,now:base,realRef:base};const restored=parsePersistedState(JSON.stringify(s),base+5*60*60*1000);expect(restored?.notices.map(n=>n.title)).toEqual(expect.arrayContaining(['Closing soon','Parking closed','Parking reopened']));
   });
   it('never refunds an entered reservation when the parked session outlasts its hold deadline',()=>{
+    s={...s,now:new Date('2026-11-02T10:00:00+08:00').getTime()};
     s=reduce(s,{type:'reserve',vehicleId:'v1'});s=reduce(s,{type:'advance',minutes:60});expect(s.wallet).toBe(5000);s=reduce(s,{type:'reserve',vehicleId:'v1'});s=reduce(s,{type:'enterReserved'});s=reduce(s,{type:'advance',minutes:120});expect(s.wallet).toBe(4600);expect(s.transactions.filter(t=>t.type==='reservationRefund')).toHaveLength(1);s=reduce(s,{type:'checkout'});expect(s.wallet).toBe(4000);expect(s.transactions.filter(t=>t.type==='reservationRefund')).toHaveLength(1);expect(s.reservations.find(r=>r.status==='completed')).toBeDefined();expect(getLatestUnresolvedExpiry(s)).toBeUndefined();
   });
   it('accepts compact Malaysian plates and prevents duplicate canonical plates',()=>{
@@ -87,6 +88,7 @@ describe('ParkEase parking rules',()=>{
     s=reduce(s,{type:'reserve',vehicleId:'v1'});s=reduce(s,{type:'expireReservation'});expect(s.reservations[0]?.status).toBe('expired');expect(s.wallet).toBe(5000);expect(capacity(s).available).toBe(147);const count=s.transactions.length;s=reduce(s,{type:'expireReservation'});expect(s.transactions).toHaveLength(count);expect(s.notice).toMatch(/no active reservation/i);
   });
   it('explains backward clock changes while active records stay intact',()=>{
+    s={...s,now:new Date('2026-11-02T12:00:00+08:00').getTime()};
     s=reduce(s,{type:'reserve',vehicleId:'v1'});s=reduce(s,{type:'setHour',hour:0,minute:59});expect(s.reservations[0]?.status).toBe('active');expect(s.wallet).toBe(4600);expect(s.notice).toMatch(/active parking records/i);
   });
 });

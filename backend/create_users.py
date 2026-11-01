@@ -1,6 +1,6 @@
 """Create initial ParkEase accounts using server-side environment variables.
 
-Set DRIVER_EMAIL/PASSWORD, OPERATOR_EMAIL/PASSWORD, and ADMIN_EMAIL/PASSWORD,
+Set USER_EMAIL/PASSWORD, OPERATOR_EMAIL/PASSWORD, and ADMIN_EMAIL/PASSWORD,
 then run `python create_users.py`. Existing accounts are left unchanged.
 """
 import os
@@ -14,7 +14,7 @@ def main() -> int:
     if os.getenv("LOCAL_AUTH_DB") == "1":
         os.environ.setdefault("DATABASE_URL", "sqlite:///./parkease.db")
         os.chdir(Path(__file__).resolve().parent)
-    requested = [("DRIVER", "driver"), ("OPERATOR", "operator"), ("ADMIN", "campus_admin")]
+    requested = [("USER", "user"), ("OPERATOR", "operator"), ("ADMIN", "campus_admin")]
     missing = [f"{prefix}_{field}" for prefix, _ in requested for field in ("EMAIL", "PASSWORD") if not os.getenv(f"{prefix}_{field}")]
     if missing:
         print("Missing required environment variables: " + ", ".join(missing), file=sys.stderr)

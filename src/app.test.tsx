@@ -1,55 +1,68 @@
 // @vitest-environment jsdom
 
-import {afterEach,beforeEach,describe,expect,it} from 'vitest';
-import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
+import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
+import {cleanup,fireEvent,render,screen} from '@testing-library/react';
 import {MemoryRouter} from 'react-router-dom';
 import {App,Provider} from './main';
-import {seed} from './domain';
+import {AuthProvider} from './auth';
 
-describe('reservation UI flow',()=>{
-  beforeEach(()=>localStorage.clear());
-  afterEach(()=>cleanup());
-  it('books the selected plate, charges RM4, and persists the active reservation',async()=>{
-    render(<MemoryRouter initialEntries={['/my-parking']}><Provider><App/></Provider></MemoryRouter>);
-    expect(screen.getByText('No active parking')).toBeDefined();
-    fireEvent.click(screen.getAllByRole('link',{name:'Reserve'})[0]);
-    fireEvent.click(screen.getByRole('button',{name:/WXY 1234/}));
-    fireEvent.click(screen.getByRole('button',{name:'Continue'}));
-    expect(screen.getByText('RM 10.00')).toBeDefined();
-    fireEvent.click(screen.getByRole('button',{name:/Continue to payment/}));
-    fireEvent.click(screen.getByRole('button',{name:/Confirm reservation/}));
-    await waitFor(()=>expect(screen.getByText('Reservation active')).toBeDefined(),{timeout:2000});
-    const saved=JSON.parse(localStorage.getItem('parkease:mvp1:v1')??'{}');
-    expect(saved.wallet).toBe(4600);
-    expect(saved.reservations[0].plate).toBe('WXY 1234');
-    expect(saved.reservations[0].status).toBe('active');
+const facility={id:1,name:'North Car Park',capacity:100,occupied:10,held:2,available:88,status:'open',hours:'05:00–01:00',restrictions:'',test_data:false,zones:[{id:10,name:'General',capacity:100,rate_sen:900}]};
+let vehicles=[{id:1,plate:'WXY 1234',label:'My Car',is_default:true}];
+let reservations:Array<{id:string;plate:string;facility:string;facility_id:number;status:string;created_at:string;expires_at:string}>=[];
+let balance=5000;
+
+function json(data:unknown,status=200){return new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}})}
+function mockApi(){
+  vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
+    const url=String(input),path=url.replace(/^.*\/api/,'');
+    if(path==='/auth/refresh')return json({access_token:'test-token',user:{id:1,email:'student@sunway.edu.my',role:'user',verified:true,is_demo:false}});
+    if(path==='/user/dashboard')return json({facilities:[facility],wallet_balance_sen:balance,payment_mode:'sandbox'});
+    if(path==='/user/vehicles'&&(!init?.method||init.method==='GET'))return json({items:vehicles});
+    if(path==='/user/parking')return json({reservations,visits:[],wallet_balance_sen:balance});
+    if(path==='/user/vehicles'&&init?.method==='POST'){
+      const body=JSON.parse(String(init.body));const vehicle={id:vehicles.length+1,plate:body.plate.toUpperCase(),label:body.label,is_default:body.is_default};vehicles=[...vehicles,vehicle];return json(vehicle,201);
+    }
+    if(path==='/user/reservations'&&init?.method==='POST'){
+      const body=JSON.parse(String(init.body));balance-=400;const reservation={id:'reservation-1',plate:'WXY 1234',facility:'North Car Park',facility_id:body.facility_id,status:'active',created_at:new Date().toISOString(),expires_at:new Date(Date.now()+3600000).toISOString()};reservations=[reservation];return json(reservation,201);
+    }
+    if(path==='/user/wallet/top-up'&&init?.method==='POST'){balance+=2000;return json({balance_sen:balance},201)}
+    return json({detail:`Unhandled test API request: ${init?.method??'GET'} ${path}`},404);
+  }));
+}
+class TestResizeObserver{observe(){}unobserve(){}disconnect(){}}
+
+function renderApp(path:string){return render(<MemoryRouter initialEntries={[path]}><AuthProvider><Provider><App/></Provider></AuthProvider></MemoryRouter>)}
+
+describe('authenticated user workspace',()=>{
+  beforeEach(()=>{localStorage.clear();sessionStorage.clear();vehicles=[{id:1,plate:'WXY 1234',label:'My Car',is_default:true}];reservations=[];balance=5000;vi.stubGlobal('ResizeObserver',TestResizeObserver);mockApi()});
+  afterEach(()=>{cleanup();vi.unstubAllGlobals()});
+
+  it('loads campus availability and the account wallet from the API',async()=>{
+    renderApp('/');
+    await screen.findByText('AVAILABLE BAYS',{}, {timeout:5000});
+    expect((await screen.findAllByText('88')).length).toBeGreaterThan(0);
+    expect(screen.getByText('RM 50.00')).toBeDefined();
+    expect(screen.getByText('North Car Park')).toBeDefined();
   });
-  it('persists theme and notification read state across a remount',async()=>{
-    const state=seed();state.notices=[{id:'notice-demo',at:state.now,title:'Reservation confirmed',message:'A demo reservation is ready.',read:false}];localStorage.setItem('parkease:mvp1:v1',JSON.stringify(state));
-    const view=render(<MemoryRouter initialEntries={['/profile']}><Provider><App/></Provider></MemoryRouter>);
-    fireEvent.click(screen.getByRole('button',{name:'Toggle theme'}));
-    await waitFor(()=>expect(JSON.parse(localStorage.getItem('parkease:mvp1:v1')??'{}').theme).toBe('dark'));
-    fireEvent.click(screen.getByRole('button',{name:'Notifications'}));
-    fireEvent.click(screen.getByRole('button',{name:/Reservation confirmed/}));
-    await waitFor(()=>expect(JSON.parse(localStorage.getItem('parkease:mvp1:v1')??'{}').notices[0].read).toBe(true));
-    view.unmount();const remounted=render(<MemoryRouter initialEntries={['/profile']}><Provider><App/></Provider></MemoryRouter>);
-    expect(remounted.container.querySelector('.app')?.className).toContain('dark');
-    fireEvent.click(screen.getByRole('button',{name:'Notifications'}));
-    expect(screen.getByRole('button',{name:/Reservation confirmed/}).className).toContain('read');
+
+  it('creates a reservation through the API and shows it in My Parking',async()=>{
+    renderApp('/reserve');
+    await screen.findByText('Choose a facility');
+    fireEvent.change(screen.getByLabelText('Vehicle'),{target:{value:'1'}});
+    fireEvent.click(screen.getByRole('button',{name:/Reserve and pay sandbox fee/}));
+    await screen.findByText('Upcoming reservation');
+    expect(await screen.findByText(/WXY 1234/)).toBeDefined();
+    expect(screen.getByText('North Car Park',{exact:false})).toBeDefined();
+    expect(balance).toBe(4600);
   });
-  it('reset restores the seeded baseline and persisted light theme',async()=>{
-    const state=seed();state.wallet=900;state.theme='dark';state.bgWalk=150;localStorage.setItem('parkease:mvp1:v1',JSON.stringify(state));
-    render(<MemoryRouter initialEntries={['/demo']}><Provider><App/></Provider></MemoryRouter>);
-    fireEvent.click(screen.getByRole('button',{name:/Reset all demo data/}));
-    fireEvent.click(screen.getByRole('button',{name:'Reset all data'}));
-    await waitFor(()=>expect(JSON.parse(localStorage.getItem('parkease:mvp1:v1')??'{}').wallet).toBe(5000));
-    const reset=JSON.parse(localStorage.getItem('parkease:mvp1:v1')??'{}');expect(reset.theme).toBe('light');expect(reset.bgReserved).toBe(30);expect(reset.bgWalk).toBe(110);expect(reset.bgHolds).toBe(13);expect(reset.reservations).toHaveLength(0);expect(reset.sessions).toHaveLength(0);
-  });
-  it('updates the mounted UI from a validated storage event without reloading',async()=>{
-    const view=render(<MemoryRouter initialEntries={['/profile']}><Provider><App/></Provider></MemoryRouter>);
-    const state=seed();state.wallet=6200;localStorage.setItem('parkease:mvp1:v1',JSON.stringify(state));
-    fireEvent(window,new StorageEvent('storage',{key:'parkease:mvp1:v1',newValue:JSON.stringify(state)}));
-    await waitFor(()=>expect(view.container.textContent).toContain('RM 62.00'));
-    expect(view.container.querySelector('.app')).not.toBeNull();
+
+  it('adds a vehicle to the account through the API',async()=>{
+    renderApp('/profile');
+    await screen.findByText('Registered vehicles');
+    fireEvent.change(screen.getByLabelText('Plate'),{target:{value:'ABC 1234'}});
+    fireEvent.change(screen.getByLabelText('Vehicle label'),{target:{value:'Second car'}});
+    fireEvent.click(screen.getByRole('button',{name:/Add vehicle/}));
+    expect(await screen.findByText('ABC 1234')).toBeDefined();
+    expect(vehicles).toHaveLength(2);
   });
 });
