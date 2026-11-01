@@ -1,0 +1,11 @@
+node_modules/
+dist/
+tsconfig.app.tsbuildinfo
+playwright-report/
+test-results/
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env.local
+
